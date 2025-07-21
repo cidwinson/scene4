@@ -77,39 +77,7 @@
         </div>
       </div>
 
-      <!-- File Upload Area -->
-      <div v-if="messages.length === 0" class="space-y-3">
-        <div 
-          class="rounded-lg bg-background-primary border-2 border-dashed border-secondary h-[120px] flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-background-tertiary transition-colors"
-          @click="triggerFileUpload"
-          @drop="handleFileDrop"
-          @dragover.prevent
-          @dragenter.prevent
-        >
-          <svg class="w-8 h-8 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-          </svg>
-          <div class="text-secondary font-inter-semibold text-sm">Drop script here or click to upload</div>
-          <div class="text-text-muted font-inter-regular text-xs">Supports PDF, TXT, FDX formats</div>
-        </div>
-        <button 
-          @click="triggerFileUpload"
-          class="w-full rounded-lg bg-secondary h-10 flex flex-row items-center justify-center gap-2 text-black hover:bg-secondary-hover transition-colors"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-          </svg>
-          <div class="font-inter-semibold text-sm">Choose File</div>
-        </button>
-        <input 
-          ref="fileInput" 
-          type="file" 
-          accept=".pdf,.txt,.fdx" 
-          class="hidden" 
-          @change="handleFileSelect"
-        />
-      </div>
-
+      
       <!-- Chat Messages -->
       <TransitionGroup
         name="message"
@@ -119,15 +87,20 @@
         enter-from-class="opacity-0 transform translate-y-2"
         enter-to-class="opacity-100 transform translate-y-0"
       >
-        <div v-for="(message, index) in messages" :key="message.id" class="flex gap-3" :class="message.type === 'user' ? 'justify-end' : 'justify-start'">
-        <!-- AI Message -->
-        <template v-if="message.type === 'ai'">
-          <div class="w-8 h-8 bg-secondary rounded-full flex items-center justify-center flex-shrink-0">
-            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-            </svg>
+        <div v-for="(message, index) in messages" :key="message.id" class="flex gap-3" :class="message.type === 'user' ? 'justify-start' : 'justify-end'">
+        <!-- User Message (Left aligned) -->
+        <template v-if="message.type === 'user'">
+          <div class="w-8 h-8 bg-background-primary rounded-full flex items-center justify-center flex-shrink-0">
+            <div class="text-text-muted font-inter-semibold text-xs">{{ userInitials }}</div>
           </div>
-          <div class="flex-1 rounded-t-xl rounded-br-xl rounded-bl-sm bg-background-tertiary p-3 border border-gray-600">
+          <div class="flex-1 max-w-[75%] rounded-t-xl rounded-br-xl rounded-bl-sm bg-background-primary p-3 border border-gray-600">
+            <div class="text-white font-inter-regular text-sm">{{ message.content }}</div>
+          </div>
+        </template>
+
+        <!-- AI Message (Right aligned) -->
+        <template v-else>
+          <div class="flex-1 max-w-[75%] rounded-t-xl rounded-bl-xl rounded-br-sm bg-background-tertiary p-3 border border-gray-600">
             <div class="text-white font-inter-regular text-sm whitespace-pre-wrap leading-relaxed" v-html="formatMessage(message.content)"></div>
             <div v-if="message.actions" class="mt-3 space-y-2">
               <button 
@@ -140,30 +113,25 @@
               </button>
             </div>
           </div>
-        </template>
-
-        <!-- User Message -->
-        <template v-else>
-          <div class="w-8 h-8 bg-background-primary rounded-full flex items-center justify-center flex-shrink-0">
-            <div class="text-text-muted font-inter-semibold text-xs">{{ userInitials }}</div>
-          </div>
-          <div class="flex-1 rounded-t-xl rounded-bl-xl rounded-br-sm bg-background-primary p-3 border border-gray-600">
-            <div class="text-white font-inter-regular text-sm">{{ message.content }}</div>
+          <div class="w-8 h-8 bg-secondary rounded-full flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
           </div>
         </template>
         </div>
       </TransitionGroup>
 
-      <!-- Loading Message -->
-      <div v-if="isLoading" class="flex gap-3 justify-start">
+      <!-- Loading Message (Right aligned like AI) -->
+      <div v-if="isLoading" class="flex gap-3 justify-end">
+        <div class="flex-1 max-w-[75%] rounded-t-xl rounded-bl-xl rounded-br-sm bg-background-tertiary p-3 border border-gray-600">
+          <div class="text-text-muted font-inter-regular text-sm">Thinking about your filmmaking question...</div>
+        </div>
         <div class="w-8 h-8 bg-secondary rounded-full flex items-center justify-center flex-shrink-0">
           <svg class="w-5 h-5 text-black animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-        </div>
-        <div class="flex-1 rounded-t-xl rounded-br-xl rounded-bl-sm bg-background-tertiary p-3 border border-gray-600">
-          <div class="text-text-muted font-inter-regular text-sm">Thinking about your filmmaking question...</div>
         </div>
       </div>
       </div>
@@ -205,7 +173,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { sendChatMessage, uploadScriptFile, type ChatMessage } from '../api/chatApi'
 import { useProjectStore } from '../stores/projectStore'
 
@@ -237,6 +205,14 @@ const currentScriptId = computed(() => {
   return projectStore.currentScript?.id || null
 })
 
+// Watch for script changes and ensure data is loaded
+watch(currentScriptId, async (newScriptId) => {
+  if (newScriptId && (!projectStore.currentScript || projectStore.currentScript.id !== newScriptId)) {
+    console.log('🔄 Script ID changed, fetching script data:', newScriptId)
+    await projectStore.fetchScript(newScriptId)
+  }
+}, { immediate: true })
+
 // Functions
 async function sendMessage() {
   if (!currentMessage.value.trim() || isLoading.value) return
@@ -256,22 +232,42 @@ async function sendMessage() {
   try {
     let response
     
-    // If we have a current script ID, use provideFeedback
+    // If we have a current script ID, use chatWithScript
     if (currentScriptId.value) {
-      console.log('Sending feedback for script ID:', currentScriptId.value)
+      console.log('🤖 Starting chat with script ID:', currentScriptId.value)
+      console.log('🤖 User query:', query)
       
-      // Check if user wants reanalysis based on keywords
-      const requestReanalysis = /\b(reanalyze|re-analyze|analyze again|update analysis|wrong|incorrect|fix|improve)\b/i.test(query)
+      // Ensure we have the script data loaded
+      if (!projectStore.currentScript || projectStore.currentScript.id !== currentScriptId.value) {
+        console.log('🔄 Loading script data before chat...')
+        await projectStore.fetchScript(currentScriptId.value)
+      }
       
-      // Check if feedback seems negative (might want to set approved = false)
-      const approved = !/\b(wrong|bad|incorrect|terrible|awful|hate|dislike)\b/i.test(query)
+      const chatResponse = await projectStore.chatWithScript(currentScriptId.value, query)
+      console.log('🤖 Chat response received:', chatResponse)
       
-      const feedbackResult = await projectStore.provideFeedback(
-        currentScriptId.value,
-        query,
-        approved,
-        requestReanalysis
-      )
+      if (chatResponse) {
+        response = {
+          response: chatResponse,
+          actions: []  // Remove all action buttons
+        }
+        console.log('🤖 Chat response processed successfully')
+      } else {
+        // Fallback to feedback if chat fails
+        console.log('❌ Chat failed, falling back to feedback for script ID:', currentScriptId.value)
+        
+        // Check if user wants reanalysis based on keywords
+        const requestReanalysis = /\b(reanalyze|re-analyze|analyze again|update analysis|wrong|incorrect|fix|improve)\b/i.test(query)
+        
+        // Check if feedback seems negative (might want to set approved = false)
+        const approved = !/\b(wrong|bad|incorrect|terrible|awful|hate|dislike)\b/i.test(query)
+        
+        const feedbackResult = await projectStore.provideFeedback(
+          currentScriptId.value,
+          query,
+          approved,
+          requestReanalysis
+        )
       
       if (feedbackResult && feedbackResult.success) {
         let responseText = `Thank you for your feedback! ${feedbackResult.message}`
@@ -299,10 +295,11 @@ async function sendMessage() {
             { label: 'View Current Analysis', action: 'view-analysis' }
           ]
         }
-      } else {
-        response = {
-          response: 'I was unable to process your feedback at this time. Please try again later.',
-          actions: []
+        } else {
+          response = {
+            response: 'I was unable to process your feedback at this time. Please try again later.',
+            actions: []
+          }
         }
       }
     } else {

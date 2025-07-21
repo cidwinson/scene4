@@ -12,6 +12,7 @@ import time
 import asyncio
 import logging
 import json
+from agents.agent.chatbot_agent import chatbot_agent
 
 from database.database import get_db, create_tables
 from database.services import AnalyzedScriptService
@@ -496,3 +497,345 @@ async def get_scripts_awaiting_feedback(
     except Exception as e:
         logger.error(f"Failed to retrieve scripts awaiting feedback: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve scripts: {str(e)}")
+    
+class ChatRequest(BaseModel):
+    message: str
+
+async def llm_based_fallback_response(user_message: str, script_data: dict, script_title: str) -> str:
+    """Use LLM to analyze script data and provide intelligent responses"""
+    try:
+        # Import a simple LLM model for fallback
+        from agents.utils.gemini_model import get_model
+        from pydantic_ai import Agent
+        
+        # Extract scene data for analysis
+        scenes_data = []
+        if script_data and isinstance(script_data, dict):
+            # Try different paths to find scenes
+            if 'script_data' in script_data and 'scenes' in script_data['script_data']:
+                scenes_data = script_data['script_data']['scenes']
+            elif 'scenes' in script_data:
+                scenes_data = script_data['scenes']
+            elif 'script_breakdown' in script_data:
+                scenes_data = script_data['script_breakdown'].get('scenes', [])
+        
+        # Count unique characters if this is a character-related question
+        character_count = 0
+        unique_characters = set()
+        if scenes_data and ('cast' in user_message.lower() or 'character' in user_message.lower() or 'how many' in user_message.lower()):
+            for scene in scenes_data:
+                characters = scene.get('characters_present', scene.get('characters', []))
+                if characters:
+                    unique_characters.update(characters)
+            character_count = len(unique_characters)
+        
+        # Create a specialized analysis agent
+        analysis_prompt = f"""
+You are a script analysis expert. You have been given complete script analysis data for '{script_title}' and need to answer the user's question by carefully analyzing the provided data.
+
+IMPORTANT: You must read through and analyze the actual scene breakdown data provided to answer questions accurately.
+
+The user asked: "{user_message}"
+
+Script Analysis Summary:
+- Script Title: {script_title}
+- Number of scenes: {len(scenes_data)}
+- Number of unique characters found: {character_count}
+- Unique characters: {list(unique_characters) if unique_characters else 'None found'}
+
+Here is the complete script analysis data:
+{json.dumps(script_data, indent=2)[:3000]}... (truncated for performance)
+
+Scene breakdown preview (first 3 scenes):
+{json.dumps(scenes_data[:3] if scenes_data else [], indent=2)}
+
+Instructions:
+1. For character/cast questions: The script has {character_count} unique characters: {list(unique_characters) if unique_characters else 'none found'}
+2. For questions about scenes with same locations and characters, analyze each scene's location and character list
+3. For budget questions, look at cost breakdown data
+4. For location questions, analyze location data from scenes
+5. Provide specific, accurate answers based on the actual data
+6. Be conversational and helpful
+
+Answer the user's question based on your analysis of this script data. Be specific and reference actual scene numbers, character names, locations, and other data from the analysis.
+"""
+        
+        # Create a simple agent for analysis
+        analysis_agent = Agent(
+            model=get_model(),
+            system_prompt="You are a script analysis expert who carefully analyzes script data to answer user questions accurately."
+        )
+        
+        # Get LLM response
+        response = await analysis_agent.run(analysis_prompt)
+        
+        # Extract response text
+        if hasattr(response, 'data'):
+            return str(response.data)
+        elif hasattr(response, 'content'):
+            return str(response.content)
+        else:
+            return str(response)
+            
+    except Exception as fallback_error:
+        logger.error(f"LLM fallback failed: {str(fallback_error)}")
+        
+        # Try to give a specific answer for character questions using extracted data
+        if character_count > 0 and ('cast' in user_message.lower() or 'character' in user_message.lower() or 'how many' in user_message.lower()):
+            return f"Based on the script analysis for '{script_title}', there are {character_count} characters in this script: {', '.join(list(unique_characters))}."
+        
+        # Only use hardcoded fallback as last resort
+        return generate_simple_fallback_response(user_message, script_data, script_title)
+
+def analyze_scenes_with_same_location_and_characters(scenes_data: list, script_title: str) -> str:
+    """Analyze scenes that have the same location with the exact same characters"""
+    if not scenes_data:
+        return f"No scene data available for '{script_title}'"
+    
+    # Group scenes by location and characters
+    location_character_groups = {}
+    
+    for scene in scenes_data:
+        # Get scene info
+        scene_num = scene.get("scene_number", scene.get("number", "Unknown"))
+        location = scene.get("location", scene.get("scene_location", "Unknown Location"))
+        characters = scene.get("characters_present", scene.get("characters", []))
+        scene_header = scene.get("scene_header", scene.get("heading", f"Scene {scene_num}"))
+        
+        # Normalize location and characters for comparison
+        location_normalized = location.strip().upper() if location else "UNKNOWN"
+        characters_set = frozenset(char.strip().upper() for char in characters if char) if characters else frozenset()
+        
+        # Create a key combining location and characters
+        key = (location_normalized, characters_set)
+        
+        if key not in location_character_groups:
+            location_character_groups[key] = []
+        
+        location_character_groups[key].append({
+            "scene_number": scene_num,
+            "scene_header": scene_header,
+            "location": location,
+            "characters": characters
+        })
+    
+    # Find groups with multiple scenes
+    matching_groups = []
+    for (location, characters_set), scenes in location_character_groups.items():
+        if len(scenes) > 1 and location != "UNKNOWN" and len(characters_set) > 0:
+            matching_groups.append({
+                "location": location,
+                "characters": sorted(list(characters_set)),
+                "scenes": scenes,
+                "scene_count": len(scenes)
+            })
+    
+    # Generate response
+    if not matching_groups:
+        return f"In '{script_title}', no scenes share the exact same location with the exact same characters. Each scene appears to have a unique combination of location and cast."
+    
+    response = f"In '{script_title}', I found {len(matching_groups)} location(s) where multiple scenes involve the same characters:\n\n"
+    
+    total_matching_scenes = 0
+    for group in matching_groups:
+        total_matching_scenes += group["scene_count"]
+        location_name = group["location"].title() if group["location"] != "UNKNOWN" else "Unknown Location"
+        
+        response += f"📍 **{location_name}**\n"
+        response += f"   Characters: {', '.join(group['characters'])}\n"
+        response += f"   Scenes ({group['scene_count']}):\n"
+        
+        for scene in group["scenes"]:
+            response += f"   • Scene {scene['scene_number']}: {scene['scene_header']}\n"
+        response += "\n"
+    
+    response += f"**Summary**: {total_matching_scenes} scenes total involve the same location with the exact same characters across {len(matching_groups)} different location(s)."
+    
+    return response
+
+def generate_simple_fallback_response(user_message: str, script_data: dict, script_title: str) -> str:
+    """Last resort fallback when both main chatbot and LLM fallback fail"""
+    return f"I'm experiencing technical difficulties analyzing '{script_title}'. Both my main AI system and backup analysis are currently unavailable. Please try your question again in a moment, or contact support if the issue persists."
+
+@app.post("/chat/{script_id}")
+async def chat_about_script(
+    script_id: str,
+    request: ChatRequest,
+    db: Session = Depends(get_db)
+):
+    """Chat about a specific analyzed script with intelligent conversation capability"""
+    
+    try:
+        logger.info(f"Chat request for script {script_id}: {request.message}")
+        
+        # Get the script analysis
+        script = AnalyzedScriptService.get_analyzed_script_by_id(db, script_id)
+        if not script:
+            raise HTTPException(status_code=404, detail="Script not found")
+        
+        # Get full script analysis data
+        script_data = script.to_dict()
+        logger.info(f"Script data keys: {list(script_data.keys())}")
+        
+        # Extract the comprehensive analysis from script data
+        comprehensive_analysis = script_data.get('comprehensive_analysis') or script_data.get('analysis_data')
+        if not comprehensive_analysis:
+            logger.warning("No comprehensive analysis found in script data")
+            comprehensive_analysis = script_data
+        
+        # Prepare comprehensive context for chatbot
+        context = {
+            "script_analysis": script_data,
+            "comprehensive_analysis": comprehensive_analysis,
+            "user_message": request.message,
+            "script_title": script.filename or script.original_filename,
+            "script_id": script_id
+        }
+        
+        # Import the helper function
+        from agents.agent.chatbot_agent import get_script_analysis_context
+        
+        # Create a detailed prompt that includes script context and full data
+        script_title = script.filename or script.original_filename
+        script_context = get_script_analysis_context(comprehensive_analysis)
+        
+        # Extract scene data for specific analysis
+        scenes_data = []
+        if comprehensive_analysis and isinstance(comprehensive_analysis, dict):
+            # Try different paths to find scenes
+            if 'script_data' in comprehensive_analysis and 'scenes' in comprehensive_analysis['script_data']:
+                scenes_data = comprehensive_analysis['script_data']['scenes']
+            elif 'scenes' in comprehensive_analysis:
+                scenes_data = comprehensive_analysis['scenes']
+            elif 'script_breakdown' in comprehensive_analysis:
+                scenes_data = comprehensive_analysis['script_breakdown'].get('scenes', [])
+        
+        logger.info(f"Found {len(scenes_data)} scenes for analysis")
+        
+        prompt = f"""You are chatting with a user about their analyzed script titled "{script_title}".
+
+User's message: {request.message}
+
+Script Analysis Summary:
+{script_context}
+
+IMPORTANT: You have access to the complete script analysis data. For specific questions about scenes, characters, locations, or budget, analyze the actual data provided.
+
+Script Details:
+- Title: {script_title}
+- Number of scenes: {len(scenes_data)}
+- Script ID: {script_id}
+
+Scene Data Available: {json.dumps(scenes_data[:3] if scenes_data else [], indent=2)}... (showing first 3 scenes)
+
+Full Analysis Data Available:
+{json.dumps(comprehensive_analysis, indent=2)[:2000]}... (truncated for brevity)
+
+Instructions:
+1. For questions about cast/characters, count unique characters across all scenes
+2. For questions about scenes with same locations and characters, analyze each scene's location and character list  
+3. For budget questions, look at cost breakdown data
+4. For location questions, analyze location data from scenes
+5. Provide specific answers with scene numbers, character names, and other details from the analysis
+6. Be conversational and helpful while being accurate to the data
+
+Please provide a helpful response that addresses the user's question using the actual script analysis data."""
+
+        # Get chatbot response with enhanced error handling
+        try:
+            logger.info("🤖 Calling main chatbot agent...")
+            logger.info(f"🤖 User message: {request.message}")
+            logger.info(f"🤖 Script context preview: {script_context[:500]}...")
+            
+            response = await chatbot_agent.run(prompt, deps=context)
+            logger.info(f"🤖 Chatbot response type: {type(response)}")
+            
+            # Extract response text properly
+            response_text = ""
+            if hasattr(response, 'data'):
+                response_text = str(response.data)
+            elif hasattr(response, 'content'):
+                response_text = str(response.content)
+            elif hasattr(response, 'message'):
+                response_text = str(response.message)
+            else:
+                response_text = str(response)
+            
+            logger.info(f"✅ Main chatbot SUCCESS: {response_text[:200]}...")
+            
+            return {
+                "success": True,
+                "response": response_text,
+                "script_id": script_id,
+                "script_title": script_title
+            }
+            
+        except Exception as agent_error:
+            logger.error(f"❌ Main chatbot FAILED: {str(agent_error)}")
+            logger.info("🔄 Trying LLM-based fallback...")
+            
+            # Use LLM-based fallback that actually analyzes the script data
+            try:
+                fallback_response = await llm_based_fallback_response(request.message, comprehensive_analysis, script_title)
+                logger.info(f"✅ LLM fallback SUCCESS: {fallback_response[:200]}...")
+                
+                return {
+                    "success": True,
+                    "response": fallback_response,
+                    "script_id": script_id,
+                    "script_title": script_title,
+                    "fallback": True
+                }
+            except Exception as fallback_error:
+                logger.error(f"❌ LLM fallback FAILED: {str(fallback_error)}")
+                logger.info("🆘 Using last resort fallback...")
+                
+                last_resort = generate_simple_fallback_response(request.message, comprehensive_analysis, script_title)
+                return {
+                    "success": True,
+                    "response": last_resort,
+                    "script_id": script_id,
+                    "script_title": script_title,
+                    "last_resort": True
+                }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chat endpoint error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+@app.get("/test-llm")
+async def test_llm_connection():
+    """Test the LLM connection"""
+    try:
+        logger.info("Testing LLM connection...")
+        
+        # Test chatbot agent initialization
+        test_prompt = "Say 'Hello, I am your film production assistant!' in a friendly way."
+        test_context = {"script_analysis": {"test": "data"}}
+        
+        response = await chatbot_agent.run(test_prompt, deps=test_context)
+        
+        response_text = ""
+        if hasattr(response, 'data'):
+            response_text = str(response.data)
+        elif hasattr(response, 'content'):
+            response_text = str(response.content)
+        else:
+            response_text = str(response)
+        
+        return {
+            "success": True,
+            "message": "LLM connection successful",
+            "test_response": response_text,
+            "model_info": str(chatbot_agent.model)
+        }
+        
+    except Exception as e:
+        logger.error(f"LLM test failed: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "LLM connection failed"
+        }

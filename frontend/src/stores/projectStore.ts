@@ -1547,6 +1547,39 @@ export const useProjectStore = defineStore('project', () => {
     }
   };
 
+  // Enhanced chatWithScript function
+  const chatWithScript = async (scriptId: string, message: string): Promise<string | null> => {
+    isLoading.value = true;
+    error.value = null;
+
+    try {
+      console.log('📡 chatWithScript - Calling API for script:', scriptId);
+      console.log('📡 chatWithScript - Message:', message);
+      
+      const result = await apiCall(`/chat/${scriptId}`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      });
+      
+      console.log('📡 chatWithScript - API result:', result);
+      
+      if (result && result.success && result.response) {
+        console.log('✅ chatWithScript - Success:', result.response.substring(0, 100) + '...');
+        return result.response;
+      } else {
+        console.error('❌ chatWithScript - Invalid response format:', result);
+        error.value = 'Invalid response from chat service';
+        return null;
+      }
+    } catch (err) {
+      console.error('❌ chatWithScript - Error:', err);
+      error.value = err instanceof Error ? err.message : 'Chat failed';
+      return null;
+    } finally {
+      isLoading.value = false;
+    }
+  };
+
   return {
     // State
     user,
@@ -1623,6 +1656,8 @@ export const useProjectStore = defineStore('project', () => {
     deleteProject,
     setCurrentProject,
     getProjectAnalysis,
+    chatWithScript,
+
     
     // Authentication Actions
     login,
