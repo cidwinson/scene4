@@ -282,7 +282,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
+import { ref, computed, inject, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '../stores/projectStore'
 
@@ -319,8 +319,16 @@ onMounted(async () => {
   if (projectStore.isLoggedIn) {
     await projectStore.fetchProjects()
   }
-  // Also fetch scripts from store
+  // Always fetch the latest scripts data to ensure freshness
   await projectStore.fetchScripts()
+})
+
+// Add a watcher to refresh data when coming back to this page
+watch(() => router.currentRoute.value.path, async (newPath) => {
+  if (newPath === '/projects') {
+    // Refresh scripts data when returning to projects page
+    await projectStore.fetchScripts()
+  }
 })
 
 // Helper functions
@@ -371,6 +379,30 @@ const formatScenes = (project: any): string => {
 const filteredProjects = computed(() => {
   // Use projects from the store (includes both demo projects and uploaded scripts)
   let allProjects = [...projectStore.projects]
+  
+  // Update existing API script projects with latest data from scripts
+  allProjects = allProjects.map(project => {
+    if (project.type === 'api-script' && project.script_id) {
+      const script = projectStore.scripts.find(s => s.id === project.script_id)
+      if (script) {
+        // Update the project with latest script data
+        return {
+          ...project,
+          budget_total: script.estimated_budget || project.budget_total || 0,
+          scripts_count: script.total_scenes || project.scripts_count || 0,
+          status: script.status === 'completed' ? 'COMPLETED' : (project.status || 'ACTIVE'),
+          scriptBreakdown: script.script_data ? {
+            scenes: script.script_data.scenes || [],
+            budget: script.cost_breakdown || {},
+            characters: script.cast_breakdown || {},
+            locations: script.location_breakdown || {},
+            props: script.props_breakdown || {}
+          } : project.scriptBreakdown
+        }
+      }
+    }
+    return project
+  })
   
   // Only add scripts that haven't been converted to projects yet
   let orphanedScripts = projectStore.scripts.filter(script => {

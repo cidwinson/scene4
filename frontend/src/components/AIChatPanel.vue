@@ -42,7 +42,7 @@
       leave-from-class="opacity-100 transform scale-100"
       leave-to-class="opacity-0 transform scale-95"
     >
-      <div v-if="!minimized" class="flex-1 overflow-y-auto p-5 space-y-4">
+      <div v-if="!minimized" ref="messagesContainer" class="flex-1 overflow-y-auto p-5 space-y-4">
       <!-- Welcome Message -->
       <div v-if="messages.length === 0" class="flex flex-row items-start justify-start gap-3">
         <div class="w-8 h-8 bg-secondary rounded-full flex items-center justify-center flex-shrink-0">
@@ -173,7 +173,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { sendChatMessage, uploadScriptFile, type ChatMessage } from '../api/chatApi'
 import { useProjectStore } from '../stores/projectStore'
 
@@ -188,6 +188,7 @@ const minimized = ref(false)
 const currentMessage = ref('')
 const isLoading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const messagesContainer = ref<HTMLElement | null>(null)
 const userInitials = ref('YU') // You can make this dynamic
 
 const messages = ref<ChatMessage[]>([])
@@ -212,6 +213,25 @@ watch(currentScriptId, async (newScriptId) => {
     await projectStore.fetchScript(newScriptId)
   }
 }, { immediate: true })
+
+// Auto-scroll to bottom when messages change
+watch(messages, async () => {
+  await nextTick()
+  scrollToBottom()
+}, { deep: true })
+
+// Auto-scroll when loading state changes
+watch(isLoading, async () => {
+  await nextTick()
+  scrollToBottom()
+})
+
+// Auto-scroll function
+function scrollToBottom() {
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+  }
+}
 
 // Functions
 async function sendMessage() {
