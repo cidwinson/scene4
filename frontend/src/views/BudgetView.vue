@@ -34,6 +34,7 @@
             ]"
           >
             <span v-if="budgetLoading">Loading...</span>
+            <span v-else-if="selectedProjectLocal === selectedProjectTitle">Current Project</span>
             <span v-else>Confirm</span>
           </button>
           
@@ -219,17 +220,28 @@
 
 <script setup lang="ts">
 import { ref, computed, inject, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import AIChatPanel from '../components/AIChatPanel.vue'
 import { useProjectStore } from '../stores/projectStore'
 
 const sidebarExpanded = inject('sidebarExpanded', ref(false))
+const route = useRoute()
 
 const showAI = ref(false)
 const projectStore = useProjectStore()
 // Combine regular projects and API scripts
 const projects = computed(() => {
+  console.log('🔍 Computing projects...')
+  console.log('📋 Store projects count:', projectStore.projects.length)
+  console.log('📋 Store scripts count:', projectStore.scripts.length)
+  
   const regularProjects = projectStore.projects
-  const apiScripts = projectStore.scripts.map(script => ({
+  console.log('📋 Regular projects:', regularProjects.map(p => ({ id: p.id, title: p.title })))
+  
+  // Only add scripts that don't already exist as projects
+  const orphanedScripts = projectStore.scripts.filter(script => {
+    return !regularProjects.some(project => project.script_id === script.id)
+  }).map(script => ({
     id: `api-${script.id}`,
     script_id: script.id,
     title: script.title || script.filename,
@@ -243,11 +255,17 @@ const projects = computed(() => {
     scripts_count: script.total_scenes || 0
   }))
   
-  return [...regularProjects, ...apiScripts]
+  console.log('📋 Orphaned scripts:', orphanedScripts.map(p => ({ id: p.id, title: p.title })))
+  
+  const allProjects = [...regularProjects, ...orphanedScripts]
+  console.log('📋 All projects:', allProjects.map(p => ({ id: p.id, title: p.title })))
+  
+  return allProjects
 })
 
-const selectedProjectTitle = ref(projectStore.selectedProjectTitle || projects.value[0]?.title || '')
-const selectedProjectLocal = ref(selectedProjectTitle.value)
+// Initialize with empty string to avoid fallback before data loads
+const selectedProjectTitle = ref('')
+const selectedProjectLocal = ref('')
 
 // Find the selected project object
 const selectedProject = computed(() =>
@@ -259,15 +277,95 @@ const budgetData = ref<any>(null)
 const budgetLoading = ref(false)
 const budgetError = ref<string | null>(null)
 
-// Watch for prop changes to sync local state
+// Track if we have a persisted project selection from navigation
+const hasPersistedSelection = ref(false)
+
+// Watch for changes in store's selected project (from navigation or localStorage)
+watch(() => projectStore.selectedProjectId, (newProjectId) => {
+  console.log('👀 BudgetView: selectedProjectId watcher triggered:', newProjectId)
+  console.log('👀 BudgetView: projects.value.length:', projects.value.length)
+  console.log('👀 BudgetView: current selectedProjectTitle:', selectedProjectTitle.value)
+  
+  if (newProjectId && projects.value.length > 0) {
+    // Find project by ID first
+    const project = projects.value.find(p => p.id === newProjectId)
+    console.log('👀 BudgetView: found project by ID:', project ? `${project.title} (${project.id})` : 'NOT FOUND')
+    
+    if (project && project.title !== selectedProjectTitle.value) {
+      selectedProjectTitle.value = project.title
+      selectedProjectLocal.value = project.title
+      hasPersistedSelection.value = true
+      console.log('🔄 BudgetView: Auto-synced with store selectedProjectId:', newProjectId, 'Title:', project.title)
+      
+      // Auto-confirm the selection since it came from navigation
+      confirmProjectChange()
+    }
+  }
+}, { immediate: true })
+
+// Watch for when projects are loaded to sync with store's selected project ID
+watch(projects, (newProjects) => {
+  console.log('👀 BudgetView: projects watcher triggered, count:', newProjects.length)
+  
+  if (newProjects.length > 0 && projectStore.selectedProjectId) {
+    const project = newProjects.find(p => p.id === projectStore.selectedProjectId)
+    console.log('👀 BudgetView: checking store project ID:', projectStore.selectedProjectId)
+    console.log('👀 BudgetView: found project:', project ? `${project.title} (${project.id})` : 'NOT FOUND')
+    
+    if (project && project.title !== selectedProjectTitle.value) {
+      selectedProjectTitle.value = project.title
+      selectedProjectLocal.value = project.title
+      hasPersistedSelection.value = true
+      console.log('🔄 BudgetView: Synced with store selectedProjectId after projects loaded:', projectStore.selectedProjectId, 'Title:', project.title)
+      
+      // Always auto-confirm to follow the store's selection
+      confirmProjectChange()
+    }
+  }
+}, { immediate: true })
+
+// Also watch for title changes (backwards compatibility)
 watch(() => projectStore.selectedProjectTitle, (newTitle) => {
-  selectedProjectTitle.value = newTitle
-  selectedProjectLocal.value = newTitle
-})
+  if (newTitle && newTitle !== selectedProjectTitle.value) {
+    selectedProjectTitle.value = newTitle
+    selectedProjectLocal.value = newTitle
+    hasPersistedSelection.value = true
+    console.log('👀 BudgetView: Watched store title change to:', newTitle)
+    
+    // Auto-confirm the selection since it came from navigation
+    confirmProjectChange()
+  }
+}, { immediate: true })
+
+// Watch for navigation to budget route to ensure immediate sync with store
+watch(() => route.path, (newPath) => {
+  if (newPath === '/budget') {
+    console.log('🔄 BudgetView: Navigation to budget detected, syncing with store')
+    console.log('🔄 BudgetView: Store selectedProjectId:', projectStore.selectedProjectId)
+    console.log('🔄 BudgetView: Store selectedProjectTitle:', projectStore.selectedProjectTitle)
+    
+    // If store has a selected project, ensure local state matches
+    if (projectStore.selectedProjectId && projects.value.length > 0) {
+      const project = projects.value.find(p => p.id === projectStore.selectedProjectId)
+      if (project && project.title !== selectedProjectTitle.value) {
+        selectedProjectTitle.value = project.title
+        selectedProjectLocal.value = project.title
+        hasPersistedSelection.value = true
+        console.log('🔄 BudgetView: Force synced on navigation to:', project.title)
+        
+        // Auto-load budget for this project
+        confirmProjectChange()
+      }
+    }
+  }
+}, { immediate: true })
 
 // Handle project change
 function onProjectChange() {
-  projectStore.setSelectedProject(selectedProjectTitle.value)
+  const project = projects.value.find(p => p.title === selectedProjectTitle.value)
+  if (project) {
+    projectStore.setSelectedProject(project.id)
+  }
 }
 
 // Load budget data for current project
@@ -303,12 +401,20 @@ async function loadBudgetData() {
 
 // Confirm project change
 async function confirmProjectChange() {
-  if (selectedProjectLocal.value !== selectedProjectTitle.value) {
+  if (selectedProjectLocal.value && selectedProjectLocal.value !== selectedProjectTitle.value) {
     console.log('Confirming budget project change to:', selectedProjectLocal.value)
     selectedProjectTitle.value = selectedProjectLocal.value
-    projectStore.setSelectedProject(selectedProjectLocal.value)
+    
+    // Find the project by title and set by ID for consistency
+    const project = projects.value.find(p => p.title === selectedProjectLocal.value)
+    if (project) {
+      projectStore.setSelectedProject(project.id)
+    }
     
     // Load budget data for new project
+    await loadBudgetData()
+  } else if (selectedProjectLocal.value === selectedProjectTitle.value) {
+    // If they're already the same, just load budget data
     await loadBudgetData()
   }
 }
@@ -433,13 +539,18 @@ function formatCategoryName(key: string): string {
 // Watch for project changes
 watch(selectedProject, (newProject) => {
   if (newProject) {
-    projectStore.setSelectedProject(newProject.title)
+    projectStore.setSelectedProject(newProject.id)
   }
 }, { immediate: true })
 
 // Load projects when component mounts
 onMounted(async () => {
-  console.log('BudgetView mounted, loading projects and scripts...')
+  console.log('🚀 BudgetView mounted')
+  console.log('📋 BEFORE loading - Store selectedProjectId:', projectStore.selectedProjectId)
+  console.log('📋 BEFORE loading - Store selectedProjectTitle:', projectStore.selectedProjectTitle)
+  console.log('📋 BEFORE loading - Component selectedProjectTitle:', selectedProjectTitle.value)
+  console.log('📋 BEFORE loading - localStorage selectedProjectId:', localStorage.getItem('selectedProjectId'))
+  console.log('📋 BEFORE loading - localStorage selectedProjectTitle:', localStorage.getItem('selectedProjectTitle'))
   
   // Load both projects and scripts
   await Promise.all([
@@ -447,20 +558,63 @@ onMounted(async () => {
     projectStore.fetchScripts()
   ])
   
-  // Load budget data for initial project
-  if (selectedProject.value) {
-    await loadBudgetData()
+  console.log('📋 AFTER loading - Store selectedProjectId:', projectStore.selectedProjectId)
+  console.log('📋 AFTER loading - Store selectedProjectTitle:', projectStore.selectedProjectTitle)
+  
+  console.log('📊 Loaded projects count:', projects.value.length)
+  console.log('📊 Available projects:', projects.value.map(p => ({ id: p.id, title: p.title })))
+  console.log('🔍 Store state after loading - selectedProjectId:', projectStore.selectedProjectId, 'selectedProjectTitle:', projectStore.selectedProjectTitle)
+  
+  // Check if we have a valid persisted project selection (prioritize ID over title)
+  let projectFound = false
+  
+  // First try to find by selectedProjectId (most reliable for navigation persistence)
+  if (projectStore.selectedProjectId) {
+    const foundProject = projects.value.find(p => p.id === projectStore.selectedProjectId)
+    if (foundProject) {
+      selectedProjectTitle.value = foundProject.title
+      selectedProjectLocal.value = foundProject.title
+      hasPersistedSelection.value = true
+      projectFound = true
+      console.log('✅ Using persisted project by ID (from navigation):', projectStore.selectedProjectId, 'Title:', foundProject.title)
+    } else {
+      console.log('⚠️ Persisted project ID not found in available projects:', projectStore.selectedProjectId)
+    }
   }
   
-  // Set default project if none selected
-  if (!selectedProjectTitle.value && projects.value.length > 0) {
+  // Fallback to selectedProjectTitle if ID didn't work
+  if (!projectFound && projectStore.selectedProjectTitle) {
+    const foundProject = projects.value.find(p => p.title === projectStore.selectedProjectTitle)
+    if (foundProject) {
+      selectedProjectTitle.value = projectStore.selectedProjectTitle
+      selectedProjectLocal.value = projectStore.selectedProjectTitle
+      hasPersistedSelection.value = true
+      projectFound = true
+      console.log('✅ Using persisted project by title (from navigation):', projectStore.selectedProjectTitle)
+    } else {
+      console.log('⚠️ Persisted project title not found in available projects:', projectStore.selectedProjectTitle)
+    }
+  }
+  
+  // Only set default if no valid persisted project
+  if (!projectFound && projects.value.length > 0) {
     selectedProjectTitle.value = projects.value[0].title
     selectedProjectLocal.value = projects.value[0].title
+    hasPersistedSelection.value = false
+    projectStore.setSelectedProject(projects.value[0].id)
+    console.log('📌 Set default project (no navigation context):', projects.value[0].title)
   }
   
-  console.log('BudgetView projects loaded:', projects.value.length)
-  console.log('Selected project:', selectedProjectTitle.value)
-  console.log('Selected project budget:', selectedProject.value?.scriptBreakdown?.budget)
+  console.log('🎯 Final selected project:', selectedProjectTitle.value)
+  
+  // ALWAYS auto-confirm if we have a selected project 
+  // (because BudgetView should follow whatever project is currently selected in the store)
+  if (selectedProjectTitle.value) {
+    console.log('💰 Auto-confirming project selection for:', selectedProjectTitle.value, 'hasPersistedSelection:', hasPersistedSelection.value)
+    await confirmProjectChange()
+  } else {
+    console.log('⚠️ No selectedProject found for budget loading')
+  }
 })
 </script>
 

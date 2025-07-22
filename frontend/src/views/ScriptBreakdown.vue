@@ -76,9 +76,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, inject, onMounted } from 'vue'
+import { ref, computed, watch, inject, onMounted, nextTick } from 'vue'
 import { useProjectStore } from '../stores/projectStore'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import ScriptPanel from '../components/ScriptPanel.vue'
 import ElementsPanel from '../components/ElementsPanel.vue'
 import AIChatPanel from '../components/AIChatPanel.vue'
@@ -87,11 +87,13 @@ import AIChatPanel from '../components/AIChatPanel.vue'
 const sidebarExpanded = inject('sidebarExpanded', ref(false))
 
 const router = useRouter()
+const route = useRoute()
 const projectStore = useProjectStore()
 
 // Reactive state
 const searchQuery = ref('')
-const selectedProjectId = ref(projectStore.selectedProjectId || projectStore.projects[0]?.id || '')
+// Initialize selectedProjectId from URL query params first, then fallback to store
+const selectedProjectId = ref(route.query.projectId as string || projectStore.selectedProjectId || projectStore.projects[0]?.id || '')
 const selectedSceneNumber = ref<number | null>(null)
 const activeTab = ref('All')
 const showAI = ref(false)
@@ -360,6 +362,44 @@ function getCharacterDescription(characterName: string, sceneNumber?: number): s
 
 function selectScene(sceneNumber: number) {
   selectedSceneNumber.value = sceneNumber
+  
+  // Auto-scroll to the selected scene
+  nextTick(() => {
+    scrollToScene(sceneNumber)
+  })
+}
+
+function scrollToScene(sceneNumber: number) {
+  // Find the scene element by its scene number
+  const sceneElements = document.querySelectorAll('[data-scene-number]')
+  const targetElement = Array.from(sceneElements).find(
+    el => el.getAttribute('data-scene-number') === sceneNumber.toString()
+  ) as HTMLElement
+  
+  if (targetElement) {
+    // Get the scrollable container (scenes list)
+    const scrollContainer = targetElement.closest('.overflow-y-auto') as HTMLElement
+    
+    if (scrollContainer) {
+      // Calculate the position to scroll to
+      const containerRect = scrollContainer.getBoundingClientRect()
+      const targetRect = targetElement.getBoundingClientRect()
+      const scrollTop = scrollContainer.scrollTop
+      
+      // Calculate offset to center the scene in the viewport
+      const targetScrollTop = scrollTop + targetRect.top - containerRect.top - (containerRect.height / 2) + (targetRect.height / 2)
+      
+      // Smooth scroll to the target scene
+      scrollContainer.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth'
+      })
+      
+      console.log(`📍 Auto-scrolled to Scene ${sceneNumber}`)
+    }
+  } else {
+    console.warn(`⚠️ Scene ${sceneNumber} element not found for scrolling`)
+  }
 }
 
 function onProjectChange(projectTitle: string) {
@@ -584,17 +624,35 @@ watch(scenes, (newScenes, oldScenes) => {
   console.log('=== SCENES WATCHER END ===')
 }, { immediate: true })
 
+// Watch for URL query parameter changes
+watch(() => route.query.projectId, (newProjectId) => {
+  console.log('🔄 URL projectId changed to:', newProjectId)
+  if (newProjectId && newProjectId !== selectedProjectId.value) {
+    console.log('📝 Updating selectedProjectId from URL:', newProjectId)
+    selectedProjectId.value = newProjectId as string
+    selectedSceneNumber.value = null // Reset scene selection
+    projectStore.setSelectedProject(newProjectId as string)
+    loadAnalysisData()
+  }
+}, { immediate: true })
+
 // Load analysis data when component mounts
 onMounted(async () => {
+  console.log('ScriptBreakdown mounted')
+  console.log('🔄 Current selectedProjectId from store:', projectStore.selectedProjectId)
+  console.log('🔄 Current selectedProjectId from component:', selectedProjectId.value)
+  
   // Load both projects and scripts
   await Promise.all([
     projectStore.fetchProjects(),
     projectStore.fetchScripts()
   ])
   
-  // Set default project if none selected
+  // If no project selected from URL or store, use first available project
   if (!selectedProjectId.value && projects.value.length > 0) {
     selectedProjectId.value = projects.value[0].id
+    projectStore.setSelectedProject(projects.value[0].id)
+    console.log('📌 Set default project:', projects.value[0].title)
   }
   
   if (selectedProjectId.value) {

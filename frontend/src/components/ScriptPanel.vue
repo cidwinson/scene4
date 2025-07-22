@@ -109,6 +109,7 @@
       <div
         v-for="scene in filteredScenes"
         :key="scene.number"
+        :data-scene-number="scene.number"
         :class="[
           'mb-4 rounded-lg bg-background-tertiary p-5 cursor-pointer transition-all duration-200 border-2',
           selectedSceneNumber === scene.number

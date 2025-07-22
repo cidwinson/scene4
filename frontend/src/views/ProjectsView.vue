@@ -88,10 +88,10 @@
           <button
             class="flex-1 rounded-md bg-gray-700 h-9 flex items-center justify-center text-sm text-text-secondary cursor-pointer transition hover:bg-gray-600 font-inter-medium disabled:opacity-50 disabled:cursor-not-allowed"
             @click="onViewButtonContainerClick(project)"
-            :disabled="loadingProjectId === project.title"
+            :disabled="loadingProjectId === project.id"
             type="button"
           >
-            <div v-if="loadingProjectId === project.title" class="flex items-center gap-2">
+            <div v-if="loadingProjectId === project.id" class="flex items-center gap-2">
               <svg class="animate-spin h-4 w-4 text-secondary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -190,7 +190,7 @@
           </div>
         </div>
       </div>
-      <!-- Create New Project Card -->
+      <!-- Create New Project Card
       <div
         class="border-2 border-secondary rounded-xl p-6 shadow-lg flex flex-col items-center justify-center gap-4 bg-background-secondary min-h-[220px] cursor-pointer transition hover:shadow-xl hover:border-secondary-hover"
         @click="goToNewProject"
@@ -202,7 +202,7 @@
         </div>
         <h2 class="text-lg font-inter-bold text-white text-center">Create New Project</h2>
         <p class="text-text-muted text-center font-inter-regular text-sm leading-snug">Start a new film project<br />with AI-powered script analysis</p>
-      </div>
+      </div> -->
     </div>
 
     <!-- Edit Project Modal -->
@@ -369,9 +369,14 @@ const formatScenes = (project: any): string => {
 }
 
 const filteredProjects = computed(() => {
-  // Combine mock projects and API scripts
-  let mockProjects = projectStore.projects
-  let apiScripts = projectStore.scripts.map(script => ({
+  // Use projects from the store (includes both demo projects and uploaded scripts)
+  let allProjects = [...projectStore.projects]
+  
+  // Only add scripts that haven't been converted to projects yet
+  let orphanedScripts = projectStore.scripts.filter(script => {
+    // Check if this script already has a corresponding project
+    return !allProjects.some(project => project.script_id === script.id)
+  }).map(script => ({
     id: `api-${script.id}`,
     script_id: script.id,
     title: script.title || script.filename,
@@ -394,7 +399,7 @@ const filteredProjects = computed(() => {
     } : undefined
   }))
   
-  let filtered = [...mockProjects, ...apiScripts]
+  let filtered = [...allProjects, ...orphanedScripts]
   
   if (activeTab.value === 'Active') filtered = filtered.filter(p => p.status === 'ACTIVE')
   else if (activeTab.value === 'In Review') filtered = filtered.filter(p => p.status === 'REVIEW')
@@ -442,9 +447,9 @@ function toggleStatusSubmenu(index: number) {
   openStatusSubmenu.value = openStatusSubmenu.value === index ? -1 : index
 }
 
-async function changeProjectStatus(project: any, statusOption: any) {
+function changeProjectStatus(project: any, statusOption: any) {
   try {
-    console.log('🔄 Attempting to change project status:', {
+    console.log('🔄 Attempting to change project status (frontend only):', {
       projectId: project.id,
       projectTitle: project.title,
       currentStatus: project.status,
@@ -452,8 +457,8 @@ async function changeProjectStatus(project: any, statusOption: any) {
       newLabel: statusOption.label
     });
     
-    // Update in the store first (this will update the backend and reactive state)
-    const success = await projectStore.updateProjectStatus(project.id, statusOption.value, statusOption.color)
+    // Update in the store (frontend memory only - no API calls)
+    const success = projectStore.updateProjectStatus(project.id, statusOption.value, statusOption.color)
     
     console.log('📡 Update result:', success);
     
@@ -462,7 +467,7 @@ async function changeProjectStatus(project: any, statusOption: any) {
       openMenuIndex.value = -1
       openStatusSubmenu.value = -1
       
-      console.log('✅ Project status updated successfully');
+      console.log('✅ Project status updated successfully (frontend only)');
       
       // Show success notification
       showNotification(`Project status updated to ${statusOption.label}`, 'success')
@@ -511,10 +516,13 @@ async function onViewButtonContainerClick(project: any) {
     // Set the selected project in the store
     projectStore.setSelectedProject(project.id)
     
-    // Navigate to Script Analysis page
-    router.push({ name: 'ScriptBreakdown' })
+    // Navigate to breakdown page with project ID
+    router.push({ 
+      path: '/breakdown',
+      query: { projectId: project.id }
+    })
     
-    console.log('Navigating to Script Analysis for project:', project.title)
+    console.log('Navigating to breakdown page for project:', project.title, 'ID:', project.id)
     
   } catch (error: any) {
     console.error('Error loading project details:', error)

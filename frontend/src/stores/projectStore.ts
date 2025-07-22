@@ -45,6 +45,8 @@ interface Project {
   updated_at: string;
   scripts_count: number;
   analysis_data?: any;
+  type?: string; // 'api-script' for uploaded scripts, undefined for demo projects
+  script_id?: string; // ID of the associated script in database
   scriptBreakdown?: {
     scenes: any[];
     budget?: Record<string, string>;
@@ -189,6 +191,22 @@ export const useProjectStore = defineStore('project', () => {
     }
   };
 
+  // Initialize selected project state from localStorage
+  const initializeSelectedProject = () => {
+    const savedProjectId = localStorage.getItem('selectedProjectId');
+    const savedProjectTitle = localStorage.getItem('selectedProjectTitle');
+    
+    if (savedProjectId) {
+      selectedProjectId.value = savedProjectId;
+      console.log('🔄 Restored selectedProjectId from localStorage:', savedProjectId);
+    }
+    
+    if (savedProjectTitle) {
+      selectedProjectTitle.value = savedProjectTitle;
+      console.log('🔄 Restored selectedProjectTitle from localStorage:', savedProjectTitle);
+    }
+  };
+
   // Computed
   const totalScripts = computed(() => pagination.value.total);
   const completedScripts = computed(() => 
@@ -311,11 +329,15 @@ export const useProjectStore = defineStore('project', () => {
     scripts.value = [];
     currentScript.value = null;
     currentAnalysis.value = null;
+    selectedProjectId.value = '';
+    selectedProjectTitle.value = '';
     
     // Clear localStorage
     localStorage.removeItem('access_token');
     localStorage.removeItem('user_data');
     localStorage.removeItem('isLoggedIn');
+    localStorage.removeItem('selectedProjectId');
+    localStorage.removeItem('selectedProjectTitle');
   };
 
   // Demo data initialization
@@ -662,16 +684,30 @@ export const useProjectStore = defineStore('project', () => {
     
     projects.value = demoProjects as Project[];
     
-    // Set initial selected project
-    if (demoProjects.length > 0) {
+    // Only set initial selected project if none is already persisted
+    if (demoProjects.length > 0 && !selectedProjectId.value) {
       selectedProjectId.value = demoProjects[0].id;
       selectedProjectTitle.value = demoProjects[0].title;
       currentProject.value = demoProjects[0] as Project;
+      console.log('Setting default project since none was persisted:', demoProjects[0].title);
+    } else if (selectedProjectId.value) {
+      console.log('Keeping persisted project selection:', selectedProjectId.value);
     }
     
     console.log('Demo data loaded:', projects.value.length, 'projects')
     console.log('First project:', projects.value[0]?.title)
     console.log('Selected project ID:', selectedProjectId.value)
+    
+    // After loading projects, try to resolve any persisted project ID that wasn't found before
+    if (selectedProjectId.value) {
+      const project = projects.value.find(p => p.id === selectedProjectId.value);
+      if (project && !selectedProjectTitle.value) {
+        selectedProjectTitle.value = project.title;
+        currentProject.value = project;
+        localStorage.setItem('selectedProjectTitle', project.title);
+        console.log('✅ Resolved persisted project ID after demo data load:', project.title);
+      }
+    }
   };
 
   // Enhanced authentication that loads demo data
@@ -990,6 +1026,17 @@ export const useProjectStore = defineStore('project', () => {
       } else {
         console.log('No additional projects from API, using demo data only');
       }
+      
+      // After loading all projects, try to resolve any persisted project ID
+      if (selectedProjectId.value) {
+        const project = projects.value.find(p => p.id === selectedProjectId.value);
+        if (project && !selectedProjectTitle.value) {
+          selectedProjectTitle.value = project.title;
+          currentProject.value = project;
+          localStorage.setItem('selectedProjectTitle', project.title);
+          console.log('✅ Resolved persisted project ID after fetchProjects:', project.title);
+        }
+      }
     } catch (err) {
       // If API fails, we already have demo data loaded
       console.log('API not available, using demo data only');
@@ -1114,7 +1161,37 @@ export const useProjectStore = defineStore('project', () => {
   const analyzeAndSave = async (file: File): Promise<SaveResponse | null> => {
     const analysisResult = await analyzeScript(file);
     if (analysisResult && analysisResult.success) {
-      return await saveAnalysis(analysisResult);
+      const saveResult = await saveAnalysis(analysisResult);
+      
+      if (saveResult && saveResult.success) {
+        // Create a project entry for the uploaded script with ACTIVE status
+        const newProject: Project = {
+          id: `api-${saveResult.database_id}`, // Prefix with 'api-' to distinguish from demo projects
+          title: file.name.replace(/\.[^/.]+$/, ''), // Remove file extension
+          description: `Script analysis project for ${file.name}`,
+          status: 'ACTIVE', // Set as ACTIVE by default
+          user_id: user.value?.id || 'current-user',
+          budget_total: analysisResult.data?.cost_breakdown?.total_cost || 0,
+          estimated_duration_days: 30, // Default estimation
+          script_filename: file.name,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          scripts_count: 1,
+          type: 'api-script', // Mark as API-generated script
+          script_id: saveResult.database_id, // Link to the script in database
+          analysis_data: analysisResult.data
+        };
+        
+        // Add to projects list at the beginning
+        projects.value.unshift(newProject);
+        
+        // Set as selected project
+        setSelectedProject(newProject.id);
+        
+        console.log('✅ Created new project for uploaded script:', newProject.title);
+      }
+      
+      return saveResult;
     }
     return null;
   };
@@ -1171,25 +1248,108 @@ export const useProjectStore = defineStore('project', () => {
   };
 
   const setSelectedProject = (projectIdOrTitle: string) => {
+    console.log('🔧 setSelectedProject called with:', projectIdOrTitle);
+    console.log('🔧 Current projects count:', projects.value.length);
+    console.log('🔧 Available project IDs:', projects.value.map(p => p.id));
+    
     // Try to find by ID first
     let project = projects.value.find(p => p.id === projectIdOrTitle);
+    console.log('🔧 Found by ID:', project ? `${project.title} (${project.id})` : 'NOT FOUND');
     
     // If not found by ID, try by title
     if (!project) {
       project = projects.value.find(p => p.title === projectIdOrTitle);
+      console.log('🔧 Found by title:', project ? `${project.title} (${project.id})` : 'NOT FOUND');
     }
     
     if (project) {
       selectedProjectId.value = project.id;
       selectedProjectTitle.value = project.title;
       currentProject.value = project;
+      
+      // Persist to localStorage for cross-page persistence
+      localStorage.setItem('selectedProjectId', project.id);
+      localStorage.setItem('selectedProjectTitle', project.title);
+      
+      console.log('💾 Saved selected project to localStorage:', project.id, project.title);
+    } else {
+      console.warn('⚠️ Project not found for selection:', projectIdOrTitle);
+      console.warn('⚠️ This might be because projects haven\'t loaded yet');
+      
+      // If projects haven't loaded yet, still persist the ID to localStorage
+      // so it can be picked up later when projects are loaded
+      if (projectIdOrTitle && (projectIdOrTitle.startsWith('api-') || projectIdOrTitle.startsWith('demo-'))) {
+        selectedProjectId.value = projectIdOrTitle;
+        localStorage.setItem('selectedProjectId', projectIdOrTitle);
+        console.log('💾 Persisted project ID for later resolution:', projectIdOrTitle);
+      }
     }
   };
 
-  const updateProjectStatus = async (projectId: string, status: string, statusColor?: string): Promise<boolean> => {
-    const updates: any = { status };
-    // Note: statusColor is a UI concern, not stored in backend
-    return await updateProject(projectId, updates);
+  const updateProjectStatus = (projectId: string, status: string, statusColor?: string): boolean => {
+    try {
+      console.log(`🔄 Frontend-only status update for project: ${projectId} to status: ${status}`);
+      
+      // First try to find in projects array
+      const projectIndex = projects.value.findIndex(p => p.id === projectId);
+      
+      if (projectIndex !== -1) {
+        // Update project in projects array
+        const oldStatus = projects.value[projectIndex].status;
+        projects.value[projectIndex].status = status;
+        
+        // Also update current project if it matches
+        if (currentProject.value?.id === projectId) {
+          currentProject.value.status = status;
+        }
+        
+        console.log(`✅ Frontend-only update: Project ${projectId} status changed from ${oldStatus} to ${status}`);
+        return true;
+      }
+      
+      // If not found in projects, it might be an orphaned script - create a project for it
+      if (projectId.startsWith('api-')) {
+        const scriptId = projectId.replace('api-', '');
+        const script = scripts.value.find(s => s.id === scriptId);
+        
+        if (script) {
+          console.log(`📋 Creating project entry for script: ${scriptId}`);
+          
+          // Create a project entry for this script
+          const newProject: Project = {
+            id: projectId,
+            title: script.filename || 'Untitled Script',
+            description: `Script analysis project for ${script.filename}`,
+            status: status, // Set to the new status
+            user_id: user.value?.id || 'current-user',
+            budget_total: script.estimated_budget || 0,
+            estimated_duration_days: 30,
+            script_filename: script.filename,
+            created_at: script.created_at,
+            updated_at: new Date().toISOString(),
+            scripts_count: 1,
+            type: 'api-script',
+            script_id: scriptId,
+            analysis_data: script
+          };
+          
+          // Add to projects array
+          projects.value.unshift(newProject);
+          
+          console.log(`✅ Created and updated project ${projectId} with status: ${status}`);
+          return true;
+        }
+      }
+      
+      console.error(`❌ Project not found: ${projectId}`);
+      error.value = 'Project not found';
+      return false;
+      
+    } catch (err) {
+      console.error('❌ Failed to update project status:', err);
+      error.value = err instanceof Error ? err.message : 'Failed to update project status';
+      return false;
+    }
   };
 
   const getProjectAnalysis = async (projectId: string): Promise<any> => {
@@ -1579,6 +1739,10 @@ export const useProjectStore = defineStore('project', () => {
       isLoading.value = false;
     }
   };
+
+  // Initialize auth and project state from localStorage
+  initializeAuth();
+  initializeSelectedProject();
 
   return {
     // State
